@@ -245,11 +245,12 @@ async def _ensure_voice(ctx: commands.Context) -> FixedVoiceClient | None:
                 await vc.disconnect(force=True)
             except Exception:
                 pass
-            return await channel.connect(cls=FixedVoiceClient)
+            await asyncio.sleep(1.0)  # Discord 側のセッション解放を待つ
+            return await channel.connect(cls=FixedVoiceClient, reconnect=False)
         if vc.channel != channel:
             await vc.move_to(channel)
         return vc                              # type: ignore[return-value]
-    return await channel.connect(cls=FixedVoiceClient)
+    return await channel.connect(cls=FixedVoiceClient, reconnect=False)
 
 
 def _gid(ctx: commands.Context) -> int:
