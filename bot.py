@@ -13,9 +13,18 @@ Discord ボイスチェンジャーボット
   !status    / !s      — 現在の設定を表示
 """
 
+import asyncio
+import logging
 import os
 import threading
 import traceback
+
+# Discord の内部ログを有効化（接続問題のデバッグ用）
+logging.basicConfig(
+    level=logging.WARNING,
+    format="%(levelname)s %(name)s: %(message)s",
+)
+logging.getLogger("discord.voice_client").setLevel(logging.DEBUG)
 
 from dotenv import load_dotenv
 
@@ -277,6 +286,18 @@ async def cmd_join(ctx: commands.Context) -> None:
 
     async def _after(s: discord.sinks.Sink, ch: discord.TextChannel) -> None:
         _recording.discard(gid)   # 録音終了時にフラグを落とす
+
+    # voice WebSocket 接続が確立するまで待機（最大 5 秒）
+    print(f"[Join] waiting for voice connection... is_connected={vc.is_connected()}")
+    for _ in range(50):
+        if vc.is_connected():
+            break
+        await asyncio.sleep(0.1)
+    print(f"[Join] after wait: is_connected={vc.is_connected()}")
+
+    if not vc.is_connected():
+        await ctx.send("❌ ボイスチャンネルへの接続がタイムアウトしました。`!join` を再試行してください。")
+        return
 
     try:
         vc.start_recording(sink, _after, ctx.channel)
