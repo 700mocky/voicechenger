@@ -146,8 +146,9 @@ bot = commands.Bot(
 )
 
 # ギルドごとの状態管理
-_changers: dict[int, VoiceChanger]       = {}
-_sinks:    dict[int, VoiceChangerSink]   = {}
+_changers:   dict[int, VoiceChanger]     = {}
+_sinks:      dict[int, VoiceChangerSink] = {}
+_recording:  set[int]                    = set()   # is_recording() が py-cord にないため自前管理
 
 
 def get_changer(guild_id: int) -> VoiceChanger:
@@ -232,8 +233,9 @@ async def cmd_join(ctx: commands.Context) -> None:
     changer = get_changer(gid)
 
     # 既存録音をリセット
-    if vc.is_recording():
+    if gid in _recording:
         vc.stop_recording()
+        _recording.discard(gid)
     if vc.is_playing():
         vc.stop()
 
@@ -241,9 +243,10 @@ async def cmd_join(ctx: commands.Context) -> None:
     _sinks[gid] = sink
 
     async def _after(s: discord.sinks.Sink, ch: discord.TextChannel) -> None:
-        pass   # 録音終了コールバック（今回は使用しない）
+        _recording.discard(gid)   # 録音終了時にフラグを落とす
 
     vc.start_recording(sink, _after, ctx.channel)
+    _recording.add(gid)
 
     await ctx.send(
         f"✅ **{vc.channel.name}** に参加しました！\n"
@@ -260,8 +263,9 @@ async def cmd_leave(ctx: commands.Context) -> None:
         return
 
     gid = _gid(ctx)
-    if ctx.voice_client.is_recording():
+    if gid in _recording:
         ctx.voice_client.stop_recording()
+        _recording.discard(gid)
     await ctx.voice_client.disconnect()
     _sinks.pop(gid, None)
     await ctx.send("👋 ボイスチャンネルから退出しました。")
