@@ -15,6 +15,7 @@ Discord ボイスチェンジャーボット
 
 import os
 import threading
+import traceback
 
 from dotenv import load_dotenv
 
@@ -178,7 +179,8 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
     if isinstance(error, commands.MissingRequiredArgument):
         await ctx.send(f"❌ 引数が不足しています: `{error.param.name}`")
         return
-    print(f"[Error] {error}")
+    # ターミナルにフルのスタックトレースを出力（原因特定用）
+    traceback.print_exception(type(error), error, error.__traceback__)
     await ctx.send(f"❌ エラーが発生しました: {error}")
 
 
@@ -208,10 +210,18 @@ async def _ensure_voice(ctx: commands.Context) -> discord.VoiceClient | None:
         await ctx.send("❌ まずボイスチャンネルに参加してください。")
         return None
     channel = ctx.author.voice.channel         # type: ignore[union-attr]
-    if ctx.voice_client:
-        if ctx.voice_client.channel != channel:
-            await ctx.voice_client.move_to(channel)
-        return ctx.voice_client                # type: ignore[return-value]
+    vc = ctx.voice_client
+    if vc:
+        # 接続オブジェクトが残っていても実際には切断済みの場合がある
+        if not vc.is_connected():
+            try:
+                await vc.disconnect(force=True)
+            except Exception:
+                pass
+            return await channel.connect()
+        if vc.channel != channel:
+            await vc.move_to(channel)
+        return vc                              # type: ignore[return-value]
     return await channel.connect()
 
 
@@ -245,8 +255,13 @@ async def cmd_join(ctx: commands.Context) -> None:
     async def _after(s: discord.sinks.Sink, ch: discord.TextChannel) -> None:
         _recording.discard(gid)   # 録音終了時にフラグを落とす
 
-    vc.start_recording(sink, _after, ctx.channel)
-    _recording.add(gid)
+    try:
+        vc.start_recording(sink, _after, ctx.channel)
+        _recording.add(gid)
+    except Exception as exc:
+        print(f"[Join] start_recording failed: {exc}")
+        await ctx.send(f"❌ 録音開始に失敗しました: {exc}\nもう一度 `!join` を試してください。")
+        return
 
     await ctx.send(
         f"✅ **{vc.channel.name}** に参加しました！\n"
