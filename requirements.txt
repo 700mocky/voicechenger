@@ -8,7 +8,7 @@ pynput>=1.7.6
 sounddevice>=0.4.6
 
 # ===== Discord ボット (bot.py) =====
-discord.py[voice]>=2.3.0
+py-cord[voice]>=2.6.0  # discord.sinks 対応のフォーク版 (discord.py は非対応)
 python-dotenv>=1.0.0
 
 # ===== オプション: 最高品質ピッチシフト =====
