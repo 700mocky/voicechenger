@@ -33,10 +33,15 @@ load_dotenv()
 # (py-cord 2.6.x は VoiceClient に recording 属性はあるが is_recording() がない)
 # =============================================================================
 
+def _vc_is_recording(self) -> bool:  # type: ignore[return]
+    """py-cord 2.6.x は is_recording() メソッドが存在しないため補完する。"""
+    return bool(getattr(self, "recording", False))
+
 if not hasattr(discord.VoiceClient, "is_recording"):
-    discord.VoiceClient.is_recording = lambda self: bool(  # type: ignore[attr-defined]
-        getattr(self, "recording", False)
-    )
+    discord.VoiceClient.is_recording = _vc_is_recording  # type: ignore[attr-defined]
+    print("[Bot] 互換パッチ適用: VoiceClient.is_recording() を追加しました")
+else:
+    print("[Bot] 互換パッチ不要: VoiceClient.is_recording() は既に存在します")
 
 # =============================================================================
 # カスタム AudioSource — スレッドセーフなリングバッファ
@@ -255,7 +260,10 @@ async def cmd_join(ctx: commands.Context) -> None:
 
     # 既存録音をリセット
     if gid in _recording:
-        vc.stop_recording()
+        try:
+            vc.stop_recording()
+        except Exception as exc:
+            print(f"[Join] stop_recording skipped: {exc}")
         _recording.discard(gid)
     if vc.is_playing():
         vc.stop()
@@ -290,7 +298,10 @@ async def cmd_leave(ctx: commands.Context) -> None:
 
     gid = _gid(ctx)
     if gid in _recording:
-        ctx.voice_client.stop_recording()
+        try:
+            ctx.voice_client.stop_recording()
+        except Exception as exc:
+            print(f"[Leave] stop_recording skipped: {exc}")
         _recording.discard(gid)
     await ctx.voice_client.disconnect()
     _sinks.pop(gid, None)
