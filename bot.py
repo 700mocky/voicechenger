@@ -196,7 +196,11 @@ async def on_command_error(ctx: commands.Context, error: Exception) -> None:
         await ctx.send(f"❌ 引数が不足しています: `{error.param.name}`")
         return
     # ターミナルにフルのスタックトレースを出力（原因特定用）
-    traceback.print_exception(type(error), error, error.__traceback__)
+    original = getattr(error, "original", error)
+    print(f"\n{'='*60}")
+    print(f"[ERROR] コマンド: {ctx.command}  ({type(original).__name__})")
+    traceback.print_exception(type(original), original, original.__traceback__)
+    print(f"{'='*60}\n")
     await ctx.send(f"❌ エラーが発生しました: {error}")
 
 
@@ -254,6 +258,8 @@ async def cmd_join(ctx: commands.Context) -> None:
     vc = await _ensure_voice(ctx)
     if vc is None:
         return
+
+    print(f"[Join DEBUG] vc type={type(vc).__name__}, has is_recording={hasattr(vc, 'is_recording')}, recording={getattr(vc, 'recording', 'N/A')}")
 
     gid     = _gid(ctx)
     changer = get_changer(gid)
