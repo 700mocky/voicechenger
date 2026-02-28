@@ -28,20 +28,17 @@ from voice_changer import VoiceChanger, DISCORD_FRAME_BYTES
 load_dotenv()
 
 # =============================================================================
-# py-cord 互換パッチ
-# is_recording() メソッドが存在しない場合はモンキーパッチで補完する
-# (py-cord 2.6.x は VoiceClient に recording 属性はあるが is_recording() がない)
+# py-cord 互換 VoiceClient サブクラス
+# py-cord 2.6.x は VoiceClient に is_recording() メソッドが存在しない。
+# channel.connect(cls=FixedVoiceClient) で確実に提供する。
 # =============================================================================
 
-def _vc_is_recording(self) -> bool:  # type: ignore[return]
-    """py-cord 2.6.x は is_recording() メソッドが存在しないため補完する。"""
-    return bool(getattr(self, "recording", False))
+class FixedVoiceClient(discord.VoiceClient):
+    """is_recording() を持つ VoiceClient サブクラス。"""
 
-if not hasattr(discord.VoiceClient, "is_recording"):
-    discord.VoiceClient.is_recording = _vc_is_recording  # type: ignore[attr-defined]
-    print("[Bot] 互換パッチ適用: VoiceClient.is_recording() を追加しました")
-else:
-    print("[Bot] 互換パッチ不要: VoiceClient.is_recording() は既に存在します")
+    def is_recording(self) -> bool:  # type: ignore[override]
+        """録音中かどうかを返す (py-cord 2.6.x 互換)。"""
+        return bool(getattr(self, "recording", False))
 
 # =============================================================================
 # カスタム AudioSource — スレッドセーフなリングバッファ
@@ -182,6 +179,7 @@ def get_changer(guild_id: int) -> VoiceChanger:
 async def on_ready() -> None:
     assert bot.user is not None
     print(f"[Bot] ログイン成功: {bot.user}  (ID: {bot.user.id})")
+    print(f"[Bot] FixedVoiceClient.is_recording: {hasattr(FixedVoiceClient, 'is_recording')}")
     print("[Bot] コマンド: !join !leave !pitch_up !pitch_down !gender !normal !status")
     await bot.change_presence(
         activity=discord.Activity(type=discord.ActivityType.listening, name="!join")
@@ -224,7 +222,7 @@ async def on_voice_state_update(
 # ユーティリティ
 # =============================================================================
 
-async def _ensure_voice(ctx: commands.Context) -> discord.VoiceClient | None:
+async def _ensure_voice(ctx: commands.Context) -> FixedVoiceClient | None:
     """コマンド投稿者がいるボイスチャンネルにボットを接続する。"""
     if not ctx.author.voice:                   # type: ignore[union-attr]
         await ctx.send("❌ まずボイスチャンネルに参加してください。")
@@ -238,11 +236,11 @@ async def _ensure_voice(ctx: commands.Context) -> discord.VoiceClient | None:
                 await vc.disconnect(force=True)
             except Exception:
                 pass
-            return await channel.connect()
+            return await channel.connect(cls=FixedVoiceClient)
         if vc.channel != channel:
             await vc.move_to(channel)
         return vc                              # type: ignore[return-value]
-    return await channel.connect()
+    return await channel.connect(cls=FixedVoiceClient)
 
 
 def _gid(ctx: commands.Context) -> int:
