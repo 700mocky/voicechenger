@@ -1,0 +1,6 @@
+sounddevice>=0.4.6
+numpy>=1.21.0
+scipy>=1.9.0
+librosa>=0.9.2
+pynput>=1.7.6
+# オプション（最高品質ピッチシフト）: brew install rubberband && pip install pyrubberband
