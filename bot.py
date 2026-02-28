@@ -28,6 +28,17 @@ from voice_changer import VoiceChanger, DISCORD_FRAME_BYTES
 load_dotenv()
 
 # =============================================================================
+# py-cord 互換パッチ
+# is_recording() メソッドが存在しない場合はモンキーパッチで補完する
+# (py-cord 2.6.x は VoiceClient に recording 属性はあるが is_recording() がない)
+# =============================================================================
+
+if not hasattr(discord.VoiceClient, "is_recording"):
+    discord.VoiceClient.is_recording = lambda self: bool(  # type: ignore[attr-defined]
+        getattr(self, "recording", False)
+    )
+
+# =============================================================================
 # カスタム AudioSource — スレッドセーフなリングバッファ
 # =============================================================================
 
