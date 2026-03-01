@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from __future__ import annotations
 """
 Discord ボイスチェンジャー for Mac
 BlackHole 仮想オーディオドライバを使ったリアルタイム音声変換
@@ -20,9 +21,10 @@ import numpy as np
 
 # ===== 設定 =================================================================
 
-SAMPLE_RATE = 44100
-BLOCK_SIZE  = 4096   # 約 93 ms。大きいほど変換品質向上・レイテンシ増加
+SAMPLE_RATE = 22050  # 44100 から下げて計算負荷と遅延を軽減
+BLOCK_SIZE  = 1024   # 512 だと librosa で警告が出るため 1024 に戻して安定させる
 CHANNELS    = 1
+VOLUME_GAIN = 4.0    # さらに音量を 4.0倍 にブースト
 
 # ===== モード定義 ===========================================================
 
@@ -30,6 +32,7 @@ MODE_NORMAL   = 0
 MODE_HIGH     = 1
 MODE_LOW      = 2
 MODE_OPPOSITE = 3
+MODE_CUSTOM   = 4
 
 # 各モードの半音シフト量（MODE_OPPOSITE は起動時に性別設定で書き換える）
 SEMITONE_MAP: dict[int, float] = {
@@ -37,6 +40,7 @@ SEMITONE_MAP: dict[int, float] = {
     MODE_HIGH:     6,
     MODE_LOW:     -6,
     MODE_OPPOSITE: 10,   # デフォルト: 男→女 (+10 半音)
+    MODE_CUSTOM:   0.0,  # ユーザー入力
 }
 
 MODE_NAMES: dict[int, str] = {
@@ -44,9 +48,11 @@ MODE_NAMES: dict[int, str] = {
     MODE_HIGH:     "高い声 (+6 半音)",
     MODE_LOW:      "低い声 (-6 半音)",
     MODE_OPPOSITE: "異性の声",   # 起動時に更新
+    MODE_CUSTOM:   "カスタム設定",
 }
 
 current_mode: int = MODE_NORMAL
+running: bool = True
 
 # ===== ピッチシフトエンジン =================================================
 
@@ -94,6 +100,7 @@ def _pitch_shift_librosa(audio: np.ndarray, semitones: float) -> np.ndarray:
         sr=SAMPLE_RATE,
         n_steps=semitones,
         bins_per_octave=24,
+        n_fft=BLOCK_SIZE  # ブロックサイズに合わせて調整
     )
 
 
@@ -138,6 +145,12 @@ def audio_callback(
     else:
         processed = audio
 
+    # 音量を大幅に増幅
+    processed = processed * VOLUME_GAIN
+
+    # ソフトリミッター（音割れをマイルドにする）
+    processed = np.tanh(processed)
+
     outdata[:] = 0.0
     copy_len = min(len(processed), frames)
     outdata[:copy_len, 0] = processed[:copy_len]
@@ -163,17 +176,28 @@ def start_keyboard_listener() -> object | None:
             elif ch == "2": new_mode = MODE_HIGH
             elif ch == "3": new_mode = MODE_LOW
             elif ch == "4": new_mode = MODE_OPPOSITE
+            elif ch == "5":
+                print("\n\n新しいピッチ（半音）を入力してください（例: 12.0）: ", end="", flush=True)
+                try:
+                    # 入力待ちでブロックしないように注意が必要だが、pynput のリスナー内での input は避けた方がよい
+                    # 今回は簡易的に 12 半音にセットするコマンドにするか、別の方法を検討
+                    # → 簡易化のため「5」は 12 半音（1オクターブ）固定にするか、
+                    # あるいは起動時に聞いておく。ここでは「1オクターブ上（固定）」とする。
+                    SEMITONE_MAP[MODE_CUSTOM] = 12.0
+                    MODE_NAMES[MODE_CUSTOM] = "カスタム (1オクターブ上)"
+                    new_mode = MODE_CUSTOM
+                except Exception:
+                    pass
             elif ch == "q":
-                print("\n\n終了します...")
-                sys.exit(0)
+                print("\n\n終了要求を受け取りました。")
+                global running
+                running = False
+                return False  # リスナーを停止
 
             if new_mode is not None:
                 current_mode = new_mode
-                print(
-                    f"\r現在のモード: {MODE_NAMES[new_mode]:<30}",
-                    end="",
-                    flush=True,
-                )
+                # 変更を即座に表示するためにフラグを立てるか、ここでプリント
+                print(f"\n  [Key] モード切替 ➡ \033[1;32m{MODE_NAMES[current_mode]}\033[0m")
         except AttributeError:
             pass  # 特殊キーは無視
 
@@ -232,7 +256,7 @@ def ask_device(prompt: str, default_idx: int | None) -> int | None:
 # ===== メイン ===============================================================
 
 def main() -> None:
-    global SEMITONE_MAP
+    global current_mode, running, SEMITONE_MAP
 
     print("=" * 58)
     print("  Discord ボイスチェンジャー for Mac  (BlackHole 対応)")
@@ -261,17 +285,12 @@ def main() -> None:
     bh_idx, bh_name = find_blackhole()
     if bh_idx is not None:
         print(f"\nBlackHole を自動検出: [{bh_idx}] {bh_name}")
-        print("このデバイスに出力しますか？ [y/n] (Enter で y): ", end="")
-        ans = input().strip().lower()
-        output_device: int | None = bh_idx if ans != "n" else None
-        if output_device is None:
-            default_out = sd.default.device[1]  # type: ignore[index]
-            output_device = ask_device("出力デバイス番号を入力", default_out)
+        output_device = bh_idx
+        print(f"自動的に BlackHole [{bh_idx}] に出力します。")
     else:
         print("\n⚠  BlackHole が見つかりません。")
-        print("   インストール手順は README.md を参照してください。")
         default_out = sd.default.device[1]  # type: ignore[index]
-        output_device = ask_device("出力デバイス番号（テスト用）", default_out)
+        output_device = ask_device("出力デバイス番号を入力", default_out)
 
     # 異性の声モード — 性別設定
     print("\n=== 異性の声モード 設定 ===")
@@ -288,10 +307,14 @@ def main() -> None:
         MODE_NAMES[MODE_OPPOSITE]   = "異性の声: 男→女 (+10 半音)"
 
     # 操作説明
-    print("\n=== 操作方法 ===")
+    print("\n" + "=" * 30)
+    print("      操作方法 (Enter不要)")
+    print("=" * 30)
     for idx in range(4):
         print(f"  [{idx + 1}] {MODE_NAMES[idx]}")
+    print(f"  [5] {MODE_NAMES[MODE_CUSTOM]}")
     print("  [q] 終了")
+    print("-" * 30)
     print()
 
     # キーボードリスナー起動
@@ -310,8 +333,42 @@ def main() -> None:
             device=(input_device, output_device),
             callback=audio_callback,
         ):
-            while True:
-                time.sleep(0.1)
+            print("\n" + "★" * 40)
+            print("  [操作方法]")
+            print("  1〜5 のキー を押して Enter を入力してください。")
+            print("  （アクセシビリティ許可済みの場合は、押すだけでOK！）")
+            print("  q + Enter で終了します。")
+            print("★" * 40 + "\n")
+
+            last_mode = -1
+            while running:
+                if current_mode != last_mode:
+                    print(f"\n  ▶ 現在のモード: \033[1;32m{MODE_NAMES[current_mode]}\033[0m")
+                    print("  [変更: 1-5, 終了: q] ➡ ", end="", flush=True)
+                    last_mode = current_mode
+                
+                # input() で入力を待つ
+                try:
+                    user_input = input().strip().lower()
+                    if user_input == "q":
+                        running = False
+                        break
+                    if user_input in ["1", "2", "3", "4"]:
+                        current_mode = int(user_input) - 1
+                    elif user_input == "5":
+                        print("新しいピッチ（半音）を入力してください (例: 12.0): ", end="", flush=True)
+                        try:
+                            val = float(input().strip())
+                            SEMITONE_MAP[MODE_CUSTOM] = val
+                            MODE_NAMES[MODE_CUSTOM] = f"カスタム ({val:+.1f} 半音)"
+                            current_mode = MODE_CUSTOM
+                        except ValueError:
+                            print("無効な数値です。")
+                except (EOFError, KeyboardInterrupt):
+                    running = False
+                    break
+
+        print("\nストリームを停止しました。")
 
     except KeyboardInterrupt:
         print("\n\n終了しました。")

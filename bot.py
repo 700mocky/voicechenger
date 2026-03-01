@@ -237,20 +237,37 @@ async def _ensure_voice(ctx: commands.Context) -> FixedVoiceClient | None:
         await ctx.send("❌ まずボイスチャンネルに参加してください。")
         return None
     channel = ctx.author.voice.channel         # type: ignore[union-attr]
-    vc = ctx.voice_client
-    if vc:
-        # 接続オブジェクトが残っていても実際には切断済みの場合がある
-        if not vc.is_connected():
+    guild   = ctx.guild                        # type: ignore[union-attr]
+
+    # 1. ギルド内の全ボイス接続を強制的にクリーンアップ
+    # bot.voice_clients をループして、このギルドに属するものだけ切断する
+    for v_client in bot.voice_clients:
+        if v_client.guild == guild:
+            print(f"[Join] Forcefully disconnecting from {v_client.channel}...")
             try:
-                await vc.disconnect(force=True)
+                await v_client.disconnect(force=True)
             except Exception:
                 pass
-            await asyncio.sleep(1.0)  # Discord 側のセッション解放を待つ
-            return await channel.connect(cls=FixedVoiceClient, reconnect=False)
-        if vc.channel != channel:
-            await vc.move_to(channel)
-        return vc                              # type: ignore[return-value]
-    return await channel.connect(cls=FixedVoiceClient, reconnect=False)
+    
+    await asyncio.sleep(2.0)
+
+    # 2. 接続を試行
+    try:
+        print(f"[Join] Attempting fresh connection to {channel.name}...")
+        return await channel.connect(cls=FixedVoiceClient, timeout=20.0, reconnect=True)
+    except Exception as exc:
+        print(f"[Join] First attempt failed: {exc}")
+        await asyncio.sleep(2.0)
+        try:
+            print(f"[Join] Final retry to {channel.name}...")
+            return await channel.connect(cls=FixedVoiceClient, timeout=20.0, reconnect=True)
+        except Exception as exc2:
+            print(f"[Join] Final attempt failed: {exc2}")
+            await ctx.send(
+                f"❌ 接続エラーが解消されません: `{exc2}`\n"
+                f"**解決策**: ボットを一度サーバーから「キック（追放）」して、再度招待してみてください。"
+            )
+            return None
 
 
 def _gid(ctx: commands.Context) -> int:
@@ -286,18 +303,10 @@ async def cmd_join(ctx: commands.Context) -> None:
     _sinks[gid] = sink
 
     async def _after(s: discord.sinks.Sink, ch: discord.TextChannel) -> None:
-        _recording.discard(gid)   # 録音終了時にフラグを落とす
-
-    # voice WebSocket 接続が確立するまで待機（最大 5 秒）
-    print(f"[Join] waiting for voice connection... is_connected={vc.is_connected()}")
-    for _ in range(50):
-        if vc.is_connected():
-            break
-        await asyncio.sleep(0.1)
-    print(f"[Join] after wait: is_connected={vc.is_connected()}")
+        _recording.discard(gid)
 
     if not vc.is_connected():
-        await ctx.send("❌ ボイスチャンネルへの接続がタイムアウトしました。`!join` を再試行してください。")
+        await ctx.send("❌ ボイスチャンネルへの接続が確立できませんでした。")
         return
 
     try:
@@ -329,7 +338,12 @@ async def cmd_leave(ctx: commands.Context) -> None:
         except Exception as exc:
             print(f"[Leave] stop_recording skipped: {exc}")
         _recording.discard(gid)
-    await ctx.voice_client.disconnect()
+    
+    try:
+        await ctx.voice_client.disconnect(force=True)
+    except Exception as e:
+        print(f"[Leave] error: {e}")
+    
     _sinks.pop(gid, None)
     await ctx.send("👋 ボイスチャンネルから退出しました。")
 
@@ -367,6 +381,14 @@ async def cmd_normal(ctx: commands.Context) -> None:
     await ctx.send(f"➡️ モード変更: **{changer.description}**")
 
 
+@bot.command(name="pitch", aliases=["p"], help="ピッチ（半音）を数値で指定します。例: !pitch 12 (1オクターブ上)")
+async def cmd_pitch(ctx: commands.Context, st: float) -> None:
+    changer = get_changer(_gid(ctx))
+    changer.mode = "custom"
+    changer._custom_st = st
+    await ctx.send(f"🔢 ピッチ指定: **{st:+.1f}** 半音 (モード: {changer.description})")
+
+
 @bot.command(name="status", aliases=["s", "info"], help="現在の設定を表示します")
 async def cmd_status(ctx: commands.Context) -> None:
     changer = get_changer(_gid(ctx))
@@ -388,6 +410,7 @@ async def cmd_status(ctx: commands.Context) -> None:
         value=(
             "`!join`  / `!j`          — ボイスチャンネルに参加\n"
             "`!leave` / `!l`          — ボイスチャンネルから退出\n"
+            "`!pitch [数値]` / `!p`   — ピッチを数値で指定\n"
             "`!pitch_up` / `!up`      — 高い声 (+6 半音)\n"
             "`!pitch_down` / `!down`  — 低い声 (-6 半音)\n"
             "`!gender [male/female]`  — 異性の声\n"

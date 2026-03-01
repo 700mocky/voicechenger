@@ -81,6 +81,7 @@ class VoiceChanger:
     def __init__(self) -> None:
         self.mode: str   = "normal"
         self._gender_st: float = 10.0  # +10: 男→女 / -10: 女→男
+        self._custom_st: float = 0.0
 
     # ---- プロパティ ----
 
@@ -88,6 +89,8 @@ class VoiceChanger:
     def semitones(self) -> float:
         if self.mode == "gender":
             return self._gender_st
+        if self.mode == "custom":
+            return self._custom_st
         return self._FIXED.get(self.mode, 0.0)
 
     @property
@@ -95,6 +98,8 @@ class VoiceChanger:
         if self.mode == "gender":
             label = "男→女 (+10 半音)" if self._gender_st > 0 else "女→男 (-10 半音)"
             return f"異性の声 ({label})"
+        if self.mode == "custom":
+            return f"カスタム ({self._custom_st:+.1f} 半音)"
         return self._DESC.get(self.mode, self.mode)
 
     # ---- モード設定 ----
